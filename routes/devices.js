@@ -47,7 +47,26 @@ router.get('/hierarchy/:hierarchyId', protect, async (req, res) => {
       });
     }
 
-    // Build the main query with your provided structure plus device name
+    // Get alarm statistics for this hierarchy
+    const alarmStatsQuery = `
+      WITH RECURSIVE hierarchy_cte AS (
+        SELECT id FROM hierarchy WHERE id = $1
+        UNION ALL
+        SELECT h.id FROM hierarchy h JOIN hierarchy_cte c ON h.parent_id = c.id
+      )
+      SELECT 
+        COUNT(*) as total_alarms,
+        COUNT(CASE WHEN ast.name = 'Active' THEN 1 END) as active_alarms
+      FROM device_alarms da
+      JOIN alarm_status_type ast ON da.status_id = ast.id
+      LEFT JOIN device d ON da.device_serial = d.serial_number
+      WHERE d.hierarchy_id IN (SELECT id FROM hierarchy_cte)
+    `;
+    
+    const alarmStatsResult = await database.query(alarmStatsQuery, [hierarchyId]);
+    const alarmStats = alarmStatsResult.rows[0];
+
+    // Build the main query
     let query = `
       WITH RECURSIVE hierarchy_cte AS (
         SELECT id, name
@@ -66,10 +85,18 @@ router.get('/hierarchy/:hierarchyId', protect, async (req, res) => {
           h.name AS hierarchy_name,
           dt.type_name AS device_name,
           dt.logo AS device_logo,
-          d.metadata
+          d.metadata,
+          l.longitude,
+          l.latitude,
+          l.updated_at AS last_comm_time,
+          CASE 
+            WHEN l.updated_at >= now() - interval '5 minutes' THEN 'Online'
+            ELSE 'Offline'
+          END AS status
         FROM device d
         JOIN hierarchy h ON h.id = d.hierarchy_id
         JOIN device_type dt ON d.device_type_id = dt.id
+        LEFT JOIN device_latest l ON l.serial_number = d.device_serial
         WHERE d.hierarchy_id IN (SELECT id FROM hierarchy_cte)
       )
       SELECT 
@@ -79,13 +106,10 @@ router.get('/hierarchy/:hierarchyId', protect, async (req, res) => {
         d.device_logo,
         d.hierarchy_name,
         d.metadata,
-        l.longitude,
-        l.latitude,
-        l.updated_at AS last_comm_time,
-        CASE 
-          WHEN l.updated_at >= now() - interval '5 minutes' THEN 'Online'
-          ELSE 'Offline'
-        END AS status,
+        d.longitude,
+        d.latitude,
+        d.last_comm_time,
+        d.status,
         COALESCE((l.data->>'GFR')::numeric, 0) AS gfr,
         COALESCE((l.data->>'GOR')::numeric, 0) AS gor,
         COALESCE((l.data->>'OFR')::numeric, 0) AS ofr,
@@ -213,6 +237,7 @@ router.get('/hierarchy/:hierarchyId', protect, async (req, res) => {
           offlineDevices: (parseInt(stats.total_devices) || 0) - (parseInt(stats.online_devices) || 0),
           deviceTypes: parseInt(stats.device_types) || 0,
           locations: parseInt(stats.locations) || 0
+          activeAlarms: parseInt(alarmStats.active_alarms) || 0
         },
         filters: {
           availableDeviceTypes: deviceTypesResult.rows.map(row => row.type_name),

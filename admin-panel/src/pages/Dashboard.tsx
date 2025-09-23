@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Users, Building2, UserCheck, AlertTriangle, Filter } from 'lucide-react'
 import { usersAPI, companiesAPI } from '../services/api'
 import toast from 'react-hot-toast'
-import { clear } from 'console'
+import DynamicMap from '../components/DynamicMap'
 
 interface Stats {
   totalUsers: number
@@ -201,5 +201,10 @@ export default function Dashboard() {
         </div>
       </div>
     </div>
+      {/* Dynamic Map */}
+      <div className="mb-8">
+        <DynamicMap />
+      </div>
+
   )
 }
